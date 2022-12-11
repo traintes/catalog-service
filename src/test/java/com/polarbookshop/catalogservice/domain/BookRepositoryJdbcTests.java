@@ -6,14 +6,20 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.jdbc.DataJdbcTest;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import com.polarbookshop.catalogservice.config.DataConfig;
 
@@ -21,13 +27,23 @@ import com.polarbookshop.catalogservice.config.DataConfig;
 @Import(DataConfig.class)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("integration")
-@Disabled
+@Testcontainers
 public class BookRepositoryJdbcTests {
 	@Autowired
 	private BookRepository bookRepository;
 	
 	@Autowired
 	private JdbcAggregateTemplate jdbcAggregateTemplate;
+	
+	@Container
+	static PostgreSQLContainer<?> postgresql = new PostgreSQLContainer<>(DockerImageName.parse("postgres:14.4"));
+	
+	@DynamicPropertySource
+	static void dynamicProperties(DynamicPropertyRegistry registry) {
+		registry.add("spring.datasource.url", postgresql::getJdbcUrl);
+		registry.add("spring.datasource.username", postgresql::getUsername);
+		registry.add("spring.datasource.password", postgresql::getPassword);
+	}
 	
 	@Test
 	void findAllBooks() {
@@ -77,6 +93,25 @@ public class BookRepositoryJdbcTests {
 	void existsByIsbnWhenNotExisting() {		
 		boolean existing = this.bookRepository.existsByIsbn("1234561240");
 		assertThat(existing).isFalse();
+	}
+	
+	@Test
+	void whenCreateBookNotAuthenticatedThenNoAuditMetadata() {
+		Book bookToCreate = Book.of("1232343456", "Title", "Author", 12.90, "Polarsophia");
+		Book createdBook = this.bookRepository.save(bookToCreate);
+		
+		assertThat(createdBook.createdBy()).isNull();
+		assertThat(createdBook.lastModifiedBy()).isNull();
+	}
+	
+	@Test
+	@WithMockUser("john")
+	void whenCreateBookAuthenticatedThenAuditMetadata() {
+		Book bookToCreate = Book.of("1232343457", "Title", "Author", 12.90, "Polarsophia");
+		Book createdBook = this.bookRepository.save(bookToCreate);
+		
+		assertThat(createdBook.createdBy()).isEqualTo("john");
+		assertThat(createdBook.lastModifiedBy()).isEqualTo("john");
 	}
 	
 	@Test
